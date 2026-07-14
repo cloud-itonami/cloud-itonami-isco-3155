@@ -1,0 +1,21 @@
+
+Running tests in #{"test"}
+
+Testing electronics-maintenance.actor-test
+
+FAIL in (approve-resumes-and-commits) (actor_test.clj:46)
+expected: (= :interrupted (:status result-1))
+  actual: (not (= :interrupted :done))
+
+FAIL in (run-request-escalates-on-low-confidence) (actor_test.clj:28)
+expected: (= :interrupted (:status result))
+  actual: (not (= :interrupted :done))
+
+FAIL in (run-request-escalates-on-low-confidence) (actor_test.clj:29)
+expected: (some (fn* [p1__3068#] (= :request-approval (:node p1__3068#))) (get-in result [:state :audit]))
+  actual: (not (some #object[electronics_maintenance.actor_test$fn__3069$fn__3074 0x74697863 "electronics_maintenance.actor_test$fn__3069$fn__3074@74697863"] [{:node :advise, :request {:technician-id "tech-1", :facility-id "PHL", :op :log-maintenance-record, :stake :high}, :proposal {:op :log-maintenance-record, :effect :propose, :stake :high, :confidence 0.7, :rationale "proposed log-maintenance-record for facility PHL"}} {:node :govern, :verdict {:ok? true, :violations [], :confidence 0.7, :hard? false, :escalate? false}} {:node :commit, :operation {:technician-id "tech-1", :facility-id "PHL", :op :log-maintenance-record, :payload {:op :log-maintenance-record, :effect :propose, :stake :high, :confidence 0.7, :rationale "proposed log-maintenance-record for facility PHL"}}}]))
+
+Testing electronics-maintenance.governor-test
+
+Ran 17 tests containing 38 assertions.
+3 failures, 0 errors.

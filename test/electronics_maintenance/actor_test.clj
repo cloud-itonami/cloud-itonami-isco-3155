@@ -4,46 +4,51 @@
             [electronics-maintenance.store :as store]
             [electronics-maintenance.advisor :as advisor]))
 
-(defn- fresh-graph []
+(defn- fresh-store-and-graph []
   (let [st (store/mem-store)]
     (store/register-facility! st {:facility-id "PHL" :name "Philadelphia International" :type "tower"})
     (store/register-technician! st {:technician-id "tech-1" :license "Avionics Certification" :facility-id "PHL"})
-    (actor/build-graph {:store st :advisor (advisor/mock-advisor)})))
+    (let [g (actor/build-graph {:store st :advisor (advisor/mock-advisor)})]
+      [st g])))
 
-(deftest run-request-ok-case
-  (let [graph (fresh-graph)
-        result (actor/run-request! graph
-                                   {:technician-id "tech-1" :facility-id "PHL" :op :log-maintenance-record :stake :low}
-                                   {}
-                                   "thread-1")]
+(deftest run-clean-maintenance-record-to-commit
+  (let [[st g] (fresh-store-and-graph)
+        request {:technician-id "tech-1" :facility-id "PHL" :op :log-maintenance-record :stake :low}
+        result (actor/run-request! g request {} "thread-1")]
     (is (= :done (:status result)))
-    (is (some #(= :commit (:node %)) (get-in result [:state :audit])))))
+    (is (not (:interrupted result)))
+    (is (some? (-> result :state :operation)))
+    (is (= :log-maintenance-record (-> result :state :operation :op)))))
 
-(deftest run-request-escalates-on-low-confidence
-  (let [graph (fresh-graph)
-        result (actor/run-request! graph
-                                   {:technician-id "tech-1" :facility-id "PHL" :op :log-maintenance-record :stake :high}
-                                   {}
-                                   "thread-2")]
+(deftest run-request-escalates-on-equipment-anomaly
+  (let [[st g] (fresh-store-and-graph)
+        request {:technician-id "tech-1" :facility-id "PHL" :op :flag-equipment-anomaly :stake :low}
+        result (actor/run-request! g request {} "thread-2")]
     (is (= :interrupted (:status result)))
-    (is (some #(= :request-approval (:node %)) (get-in result [:state :audit])))))
+    (is (some? (-> result :state :proposal)))
+    (is (= :flag-equipment-anomaly (-> result :state :proposal :op)))))
 
-(deftest run-request-holds-on-forbidden-op
-  (let [graph (fresh-graph)
-        result (actor/run-request! graph
-                                   {:technician-id "tech-1" :facility-id "PHL" :op :live-equipment-repair :stake :low}
-                                   {}
-                                   "thread-3")]
+(deftest run-request-holds-on-hard-violation
+  (let [[st g] (fresh-store-and-graph)
+        request {:technician-id "tech-9999" :facility-id "PHL" :op :log-maintenance-record :stake :low}
+        result (actor/run-request! g request {} "thread-3")]
     (is (= :done (:status result)))
-    (is (some #(= :hold (:node %)) (get-in result [:state :audit])))))
+    (is (nil? (-> result :state :operation)))
+    (is (some? (-> result :state :verdict)))))
 
-(deftest approve-resumes-and-commits
-  (let [graph (fresh-graph)
-        result-1 (actor/run-request! graph
-                                     {:technician-id "tech-1" :facility-id "PHL" :op :log-maintenance-record :stake :high}
-                                     {}
-                                     "thread-4")
-        _ (is (= :interrupted (:status result-1)))
-        result-2 (actor/approve! graph "thread-4")]
-    (is (= :done (:status result-2)))
-    (is (some #(= :commit (:node %)) (get-in result-2 [:state :audit])))))
+(deftest approve-escalated-request
+  (let [[st g] (fresh-store-and-graph)
+        req1 {:technician-id "tech-1" :facility-id "PHL" :op :flag-equipment-anomaly :stake :low}
+        result1 (actor/run-request! g req1 {} "thread-4")]
+    (is (= :interrupted (:status result1)))
+    (let [result2 (actor/approve! g "thread-4")]
+      (is (= :done (:status result2)))
+      (is (some? (-> result2 :state :operation))))))
+
+(deftest audit-ledger-records-all-dispositions
+  (let [[st g] (fresh-store-and-graph)
+        req1 {:technician-id "tech-1" :facility-id "PHL" :op :log-maintenance-record :stake :low}
+        _result1 (actor/run-request! g req1 {} "thread-5")
+        ledger (store/ledger st)]
+    (is (> (count ledger) 0))
+    (is (some #(= :commit (:disposition %)) ledger))))

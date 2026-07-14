@@ -26,12 +26,13 @@
 (defn- infer
   "Deterministic mock inference: reads the request's declared op/stake
   straight through (a stand-in for what an LLM would extract from free
-  text), with a stake-derived confidence."
+  text), with a stake-derived confidence. Higher stake correlates with
+  lower confidence (advisor uncertainty on high-stakes decisions)."
   [_store {:keys [op stake] :as request}]
   {:op op
    :effect :propose
    :stake (or stake :low)
-   :confidence (case (or stake :low) :high 0.7 :medium 0.85 :low 0.95)
+   :confidence (case (or stake :low) :high 0.4 :medium 0.75 :low 0.95)
    :rationale (str "proposed " (name op) " for facility " (:facility-id request))})
 
 (defn mock-advisor []
