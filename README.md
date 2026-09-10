@@ -67,15 +67,15 @@ human-in-the-loop interrupt/resume via checkpointing.
                                           +-> :hold               (:hard? true)
 ```
 
-- `src/electronics_maintenance/store.cljc` — `Store` protocol + `MemStore`:
+- `src/electronics_maintenance/store.kotoba` — `Store` protocol + `MemStore`:
   registered technicians and facilities, committed operations, an append-only audit ledger.
-- `src/electronics_maintenance/advisor.cljc` — `Advisor` protocol; `mock-advisor`
+- `src/electronics_maintenance/advisor.kotoba` — `Advisor` protocol; `mock-advisor`
   (deterministic, default) proposes an electronics maintenance support action from a
   request; `llm-advisor` wraps a `langchain.model/ChatModel` — either
   way the advisor only ever produces a `:propose`-effect proposal,
   never a committed record, and LLM parse failures always yield
   `confidence 0.0` (forces escalation, never fabricated confidence).
-- `src/electronics_maintenance/governor.cljc` — `ElectronicsMaintenanceGovernor/check`: a pure
+- `src/electronics_maintenance/governor.kotoba` — `ElectronicsMaintenanceGovernor/check`: a pure
   function, wired as its own `:govern` node. Hard invariants
   (unregistered technician/facility, a proposal whose `:effect` isn't `:propose`,
   any operation touching live equipment work / calibration / certification) 
@@ -83,7 +83,7 @@ human-in-the-loop interrupt/resume via checkpointing.
   or low advisor confidence) always route to `:request-approval` — an
   `interrupt-before` node that the graph checkpoints and only resumes on
   explicit human approval (`actor/approve!`).
-- `src/electronics_maintenance/actor.cljc` — `build-graph`, `run-request!`,
+- `src/electronics_maintenance/actor.kotoba` — `build-graph`, `run-request!`,
   `approve!`: the `langgraph.graph/state-graph` wiring itself.
 
 ```bash
