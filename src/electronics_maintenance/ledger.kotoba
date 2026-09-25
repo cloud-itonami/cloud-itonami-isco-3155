@@ -1,0 +1,23 @@
+(ns electronics-maintenance.ledger
+  "The audit ledger of the ISCO-08 3155 ATC electronics maintenance
+  support actor: one entry per commit, hold, escalation, and refused
+  approval, in the order they happened.
+
+  Append-only over `electronics-maintenance.store/append-ledger!` --
+  there is no update or delete, and every entry carries its position
+  `:seq`, so a missing or reordered entry shows as a gap rather than
+  disappearing. Holds and refusals are recorded as well as commits: a
+  refusal that leaves no trace cannot be audited."
+  (:require [electronics-maintenance.store :as store]))
+
+(defn entries
+  "All entries, oldest first."
+  [st]
+  (vec (store/ledger st)))
+
+(defn append!
+  "Append `entry` with its `:seq`; returns the appended entry."
+  [st entry]
+  (let [e (assoc entry :seq (count (store/ledger st)))]
+    (store/append-ledger! st e)
+    e))

@@ -19,12 +19,18 @@
 
   The unconditional invariant: the ElectronicsMaintenanceAdvisor can never
   directly commit a record or dispatch an action the ElectronicsMaintenanceGovernor
-  refuses — every commit-operation! call is gated behind `:decide`."
+  refuses — every commit-operation! call is gated behind `:decide`.
+
+  Human sign-off goes through `approve!`, which names the approver and
+  refuses (recording the refusal) unless the thread is waiting at
+  `:request-approval` -- see `electronics-maintenance.operation`."
   (:require [langgraph.graph :as g]
             [langgraph.checkpoint :as cp]
             [electronics-maintenance.advisor :as advisor]
             [electronics-maintenance.governor :as governor]
-            [electronics-maintenance.store :as store]))
+            [electronics-maintenance.store :as store]
+            [electronics-maintenance.ledger :as ledger]
+            [electronics-maintenance.operation :as operation]))
 
 (defn build-graph
   "Build a compiled ElectronicsMaintenanceActor graph. `store` implements
@@ -42,6 +48,7 @@
          :verdict     {:default nil}
          :disposition {:default nil}
          :operation   {:default nil}
+         :approval    {:default nil}
          :audit       {:reducer into :default []}}})
       (g/add-node :intake (fn [s] s))
       (g/add-node :advise
@@ -55,25 +62,28 @@
                        {:verdict v
                         :audit [{:node :govern :verdict v}]})))
       (g/add-node :decide
-                   (fn [{:keys [verdict]}]
-                     {:disposition (cond
-                                     (:hard? verdict) :hold
-                                     (:escalate? verdict) :request-approval
-                                     :else :commit)}))
+                   (fn [{:keys [request verdict]}]
+                     (let [d (cond
+                               (:hard? verdict) :hold
+                               (:escalate? verdict) :request-approval
+                               :else :commit)]
+                       (when (= :request-approval d)
+                         (ledger/append! store {:event :escalated :disposition :request-approval
+                                                :request request :verdict verdict}))
+                       {:disposition d})))
       (g/add-node :request-approval (fn [s] s))
       (g/add-node :commit
-                   (fn [{:keys [request proposal]}]
+                   (fn [{:keys [request proposal approval]}]
                      (let [operation {:technician-id (:technician-id request)
                                       :facility-id (:facility-id request)
                                       :op (:op proposal)
                                       :payload proposal}]
-                       (store/commit-operation! store operation)
-                       (store/append-ledger! store {:disposition :commit :operation operation})
+                       (operation/commit! store operation (:approver approval))
                        {:operation operation
                         :audit [{:node :commit :operation operation}]})))
       (g/add-node :hold
                    (fn [{:keys [verdict]}]
-                     (store/append-ledger! store {:disposition :hold :verdict verdict})
+                     (ledger/append! store {:event :held :disposition :hold :verdict verdict})
                      {:audit [{:node :hold :verdict verdict}]}))
       (g/set-entry-point :intake)
       (g/add-edge :intake :advise)
@@ -101,8 +111,16 @@
   (g/run* graph {:request request :context context} {:thread-id thread-id}))
 
 (defn approve!
-  "Human-in-the-loop resume: the interrupted `:request-approval` node
-  advances straight to `:commit` on resume (approval is the act of
-  resuming the thread)."
-  [graph thread-id]
-  (g/run* graph nil {:thread-id thread-id :resume? true}))
+  "Human-in-the-loop sign-off by `approver` on the thread `thread-id`.
+  Resumes the interrupted `:request-approval` node straight to
+  `:commit`, which records `approver` as `:approved-by`. Refuses --
+  appending an `:approval-refused` ledger entry to `store` and running
+  nothing -- per `electronics-maintenance.operation/approval-refusal`.
+  Returns the run result, or `{:status :refused :reason kw}`."
+  [graph store thread-id approver]
+  (if-let [why (operation/approval-refusal (g/get-state graph thread-id) approver)]
+    (do (ledger/append! store {:event :approval-refused :thread-id thread-id
+                               :approver approver :reason why})
+        {:status :refused :reason why})
+    (g/run* graph {:approval {:approver approver}}
+            {:thread-id thread-id :resume? true})))

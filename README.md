@@ -83,12 +83,26 @@ human-in-the-loop interrupt/resume via checkpointing.
   or low advisor confidence) always route to `:request-approval` — an
   `interrupt-before` node that the graph checkpoints and only resumes on
   explicit human approval (`actor/approve!`).
+- `src/electronics_maintenance/operation.kotoba` — the only write path
+  (`commit!`, which names the approver in the ledger entry) and the
+  approval gate (`approval-refusal`, a pure function of the thread's
+  checkpoint): an approval is refused and recorded unless the approver
+  is named and the thread is waiting at `:request-approval` —
+  `:no-approver`, `:no-such-thread`, `:already-approved`,
+  `:not-escalated`. One sign-off writes one record.
+- `src/electronics_maintenance/ledger.kotoba` — append-only audit ledger
+  over the store: every commit, hold, escalation and refused approval,
+  each with its gapless `:seq`.
 - `src/electronics_maintenance/actor.kotoba` — `build-graph`, `run-request!`,
-  `approve!`: the `langgraph.graph/state-graph` wiring itself.
+  `approve!` (`graph store thread-id approver`): the
+  `langgraph.graph/state-graph` wiring itself.
 
 ```bash
-kbb -M:test
+kbb -M:test   # run_tests.kotoba: loads the .kotoba sources, runs every *-test ns
 ```
+
+26 tests / 77 assertions green. `run_tests.kotoba` refuses (exit 2) to
+report a pass on a run below that count, and exits 1 on any failure.
 
 This is what backs this repo's `:maturity :implemented` entry in
 [`kotoba-lang/occupation`](https://github.com/kotoba-lang/occupation).
