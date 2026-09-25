@@ -1,0 +1,101 @@
+(ns electronics-maintenance.operation-test
+  "Each approval refusal is pinned by its reason literal AND by what it
+  did not write: an assertion on the reason alone would pass on a run
+  that refused for some other cause, and one on the write count alone
+  would pass on a run that never reached the gate."
+  (:require [clojure.test :refer [deftest is testing]]
+            [electronics-maintenance.actor :as actor]
+            [electronics-maintenance.advisor :as advisor]
+            [electronics-maintenance.ledger :as ledger]
+            [electronics-maintenance.operation :as operation]
+            [electronics-maintenance.store :as store]))
+
+(defn- fresh []
+  (let [st (store/mem-store)]
+    (store/register-facility! st {:facility-id "PHL" :name "Philadelphia International" :type "tower"})
+    (store/register-technician! st {:technician-id "tech-1" :license "Avionics Certification" :facility-id "PHL"})
+    [st (actor/build-graph {:store st :advisor (advisor/mock-advisor)})]))
+
+(def ^:private clean   {:technician-id "tech-1" :facility-id "PHL" :op :log-maintenance-record :stake :low})
+(def ^:private anomaly {:technician-id "tech-1" :facility-id "PHL" :op :flag-equipment-anomaly :stake :low})
+(def ^:private unknown {:technician-id "tech-9999" :facility-id "PHL" :op :log-maintenance-record :stake :low})
+
+(defn- ops [st] (count (store/operations-of st "PHL")))
+(defn- last-entry [st] (peek (ledger/entries st)))
+
+(deftest approving-an-auto-committed-thread-writes-nothing
+  (let [[st g] (fresh)]
+    (actor/run-request! g clean {} "t")
+    (is (= 1 (ops st)))
+    (let [r (actor/approve! g st "t" "supervisor-1")]
+      (is (= {:status :refused :reason :not-escalated} r))
+      (is (= 1 (ops st)) "a second record would be a duplicate commit")
+      (is (= {:event :approval-refused :reason :not-escalated :thread-id "t"}
+             (select-keys (last-entry st) [:event :reason :thread-id]))))))
+
+(deftest approving-a-held-thread-writes-nothing-and-reruns-nothing
+  (let [[st g] (fresh)]
+    (actor/run-request! g unknown {} "t")
+    (let [r (actor/approve! g st "t" "supervisor-1")]
+      (is (= :not-escalated (:reason r)))
+      (is (zero? (ops st)))
+      (is (= 1 (count (filter #(= :hold (:disposition %)) (ledger/entries st))))
+          "the hold node must not run a second time"))))
+
+(deftest approving-an-unknown-thread-is-refused-not-thrown
+  (let [[st g] (fresh)]
+    (is (= {:status :refused :reason :no-such-thread}
+           (actor/approve! g st "never-run" "supervisor-1")))
+    (is (zero? (ops st)))))
+
+(deftest an-unnamed-approver-is-refused-and-the-thread-stays-waiting
+  (let [[st g] (fresh)]
+    (is (= :interrupted (:status (actor/run-request! g anomaly {} "t"))))
+    (doseq [who [nil "" "   " :supervisor-1]]
+      (testing (pr-str who)
+        (is (= :no-approver (:reason (actor/approve! g st "t" who))))
+        (is (zero? (ops st)))))
+    (testing "the refusals did not consume the escalation"
+      (is (= :done (:status (actor/approve! g st "t" "supervisor-1"))))
+      (is (= 1 (ops st))))))
+
+(deftest one-sign-off-writes-one-record
+  (let [[st g] (fresh)]
+    (actor/run-request! g anomaly {} "t")
+    (is (= :done (:status (actor/approve! g st "t" "supervisor-1"))))
+    (is (= :already-approved (:reason (actor/approve! g st "t" "supervisor-2"))))
+    (is (= 1 (ops st)))))
+
+(deftest the-ledger-names-who-approved
+  (let [[st g] (fresh)]
+    (actor/run-request! g clean {} "auto")
+    (actor/run-request! g anomaly {} "esc")
+    (actor/approve! g st "esc" "supervisor-1")
+    (let [commits (filter #(= :committed (:event %)) (ledger/entries st))]
+      (is (= [nil "supervisor-1"] (mapv :approved-by commits)))
+      (is (= [:log-maintenance-record :flag-equipment-anomaly]
+             (mapv (comp :op :operation) commits))))))
+
+(deftest the-ledger-is-gapless-and-records-every-disposition
+  (let [[st g] (fresh)]
+    (actor/run-request! g clean {} "a")
+    (actor/run-request! g unknown {} "b")
+    (actor/run-request! g anomaly {} "c")
+    (actor/approve! g st "a" "supervisor-1")
+    (actor/approve! g st "c" "supervisor-1")
+    (let [es (ledger/entries st)]
+      (is (= (range (count es)) (map :seq es)))
+      (is (= [:committed :held :escalated :approval-refused :committed]
+             (mapv :event es))))))
+
+(deftest approval-refusal-is-a-function-of-the-checkpoint
+  (let [waiting {:status :interrupted :frontier [:request-approval] :state {}}]
+    (is (nil? (operation/approval-refusal waiting "supervisor-1")))
+    (is (= :no-approver (operation/approval-refusal waiting "")))
+    (is (= :no-such-thread (operation/approval-refusal nil "supervisor-1")))
+    (is (= :already-approved (operation/approval-refusal
+                              (assoc waiting :state {:approval {:approver "x"}}) "supervisor-1")))
+    (is (= :not-escalated (operation/approval-refusal
+                           (assoc waiting :status :done :frontier []) "supervisor-1")))
+    (is (= :not-escalated (operation/approval-refusal
+                           (assoc waiting :frontier [:commit]) "supervisor-1")))))

@@ -6,3 +6,5 @@ target/
 *.swo
 *~
 .DS_Store
+
+.nbb/

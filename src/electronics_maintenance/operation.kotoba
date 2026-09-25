@@ -1,0 +1,49 @@
+(ns electronics-maintenance.operation
+  "The only write path from a governed proposal to an operation record,
+  and the gate on human approval.
+
+  Measured on origin/main 5ccd0f0 (2026-09-25), before this ns existed,
+  `actor/approve!` resumed whatever thread it was given. langgraph's
+  `run*` resumes only an :interrupted checkpoint; on any other thread a
+  nil input re-runs the graph from its entry point. So `approve!` on a
+  thread that had already auto-committed wrote a SECOND operation, on a
+  held thread it appended a second :hold, and on an unknown thread it
+  threw. No approver was named anywhere: an approved commit and an
+  auto-commit left identical ledger entries.
+
+  `approval-refusal` is a pure function of the thread's latest
+  checkpoint and the approver. An approval is refused -- and the
+  refusal is recorded by the actor -- when:
+
+    :no-approver       the approver is not a non-blank string
+    :no-such-thread    the thread has no checkpoint
+    :already-approved  the thread already carries an approval
+    :not-escalated     the thread is not waiting at :request-approval
+                       (it committed, it was held, or it never escalated)
+
+  `commit!` writes the record and its ledger entry together, naming the
+  approver (nil for a proposal the governor passed outright)."
+  (:require [electronics-maintenance.store :as store]
+            [electronics-maintenance.ledger :as ledger]))
+
+(defn- named? [approver]
+  (and (string? approver) (not (re-matches #"\s*" approver))))
+
+(defn approval-refusal
+  "nil when `approver` may sign off the thread whose latest checkpoint
+  is `latest`; otherwise the refusal reason keyword."
+  [latest approver]
+  (cond
+    (not (named? approver))                              :no-approver
+    (nil? latest)                                        :no-such-thread
+    (some? (get-in latest [:state :approval]))           :already-approved
+    (not (and (= :interrupted (:status latest))
+              (some #{:request-approval} (:frontier latest)))) :not-escalated))
+
+(defn commit!
+  "Write `operation` and its :commit ledger entry. `approver` is the
+  human who signed off, or nil when no sign-off was required."
+  [st operation approver]
+  (store/commit-operation! st operation)
+  (ledger/append! st {:event :committed :disposition :commit
+                      :operation operation :approved-by approver}))

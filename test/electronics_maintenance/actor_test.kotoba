@@ -41,7 +41,7 @@
         req1 {:technician-id "tech-1" :facility-id "PHL" :op :flag-equipment-anomaly :stake :low}
         result1 (actor/run-request! g req1 {} "thread-4")]
     (is (= :interrupted (:status result1)))
-    (let [result2 (actor/approve! g "thread-4")]
+    (let [result2 (actor/approve! g st "thread-4" "supervisor-1")]
       (is (= :done (:status result2)))
       (is (some? (-> result2 :state :operation))))))
 
